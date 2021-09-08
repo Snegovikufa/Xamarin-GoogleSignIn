@@ -1,5 +1,7 @@
-﻿using System.Diagnostics;
+﻿using System;
+using System.Diagnostics;
 using System.Threading.Tasks;
+using Android.Accounts;
 using Android.App;
 using Android.Content;
 using Android.Gms.Auth.Api.SignIn;
@@ -11,6 +13,7 @@ using Android.Runtime;
 using Android.Util;
 using Android.Views;
 using Android.Widget;
+using Java.Util.Concurrent;
 
 #nullable enable
 
@@ -22,15 +25,14 @@ namespace SigninQuickstart
     {
         private const string Tag = nameof(MainActivity);
 
-        private const int RC_SIGN_IN = 9001;
+        private const int RcSignIn = 9001;
 
         private GoogleSignInClient? _googleApiClient;
-        private ProgressDialog? _progressDialog;
         private GoogleSignInClient GoogleApiClient => _googleApiClient ??= CreateGoogleApiClient();
 
         private TextView StatusTextView => FindViewById<TextView>(Resource.Id.status)!;
-        public View SignOutButton => FindViewById(Resource.Id.sign_out_button)!;
-        public SignInButton SignInButton => FindViewById<SignInButton>(Resource.Id.sign_in_button)!;
+        private View SignOutButton => FindViewById(Resource.Id.sign_out_button)!;
+        private SignInButton SignInButton => FindViewById<SignInButton>(Resource.Id.sign_in_button)!;
 
         public async void OnClick(View? v)
         {
@@ -87,30 +89,17 @@ namespace SigninQuickstart
             return GoogleSignIn.GetClient(this, options);
         }
 
-        protected override void OnStart()
-        {
-            base.OnStart();
-
-            ShowProgressDialog();
-        }
-
-        protected override void OnResume()
-        {
-            base.OnResume();
-            HideProgressDialog();
-        }
-
         protected override async void OnActivityResult(int requestCode, Result resultCode, Intent? data)
         {
             base.OnActivityResult(requestCode, resultCode, data);
             Log.Debug(Tag, "onActivityResult:" + requestCode + ":" + resultCode + ":" + data);
 
-            if (requestCode == RC_SIGN_IN)
+            if (requestCode == RcSignIn)
             {
                 if (resultCode == Result.Ok)
                 {
                     var result = await GoogleSignIn.GetSignedInAccountFromIntent(data);
-                    HandleSignInResult(result.JavaCast<GoogleSignInAccount>());
+                    await HandleSignInResult(result.JavaCast<GoogleSignInAccount>());
                 }
                 else if (resultCode == Result.Canceled)
                 {
@@ -119,16 +108,34 @@ namespace SigninQuickstart
             }
         }
 
-        public void HandleSignInResult(GoogleSignInAccount result)
+        private async Task HandleSignInResult(GoogleSignInAccount result)
         {
             StatusTextView.Text = string.Format(GetString(Resource.String.signed_in_fmt), result.DisplayName);
+
+            using var accountManager = AccountManager.Get(Application.Context);
+            using var accountManagerFuture = accountManager!.GetAuthToken(result.Account, GetScope(),
+                null,
+                this,
+                null,
+                null);
+            using var tokenBundle = await accountManagerFuture!.GetResultAsync(2, TimeUnit.Minutes);
+            using var bundle = tokenBundle.JavaCast<Bundle>();
+            var authToken = bundle!.GetString(AccountManager.KeyAuthtoken);
+            Toast.MakeText(ApplicationContext, authToken, ToastLength.Short);
+
             UpdateUi(true);
+        }
+
+        private static string GetScope()
+        {
+            var scopes = new[] { Scopes.Profile, Scopes.Email };
+            return $"oauth2:{string.Join(" ", scopes)}";
         }
 
         private void SignIn()
         {
             var signInIntent = GoogleApiClient.SignInIntent;
-            StartActivityForResult(signInIntent, RC_SIGN_IN);
+            StartActivityForResult(signInIntent, RcSignIn);
         }
 
         private async Task SignOut()
@@ -137,27 +144,7 @@ namespace SigninQuickstart
             UpdateUi(false);
         }
 
-        public void ShowProgressDialog()
-        {
-            if (_progressDialog == null)
-            {
-                _progressDialog = new ProgressDialog(this);
-                _progressDialog.SetMessage(GetString(Resource.String.loading));
-                _progressDialog.Indeterminate = true;
-            }
-
-            _progressDialog.Show();
-        }
-
-        public void HideProgressDialog()
-        {
-            if (_progressDialog is { IsShowing: true })
-            {
-                _progressDialog.Hide();
-            }
-        }
-
-        public void UpdateUi(bool isSignedIn)
+        private void UpdateUi(bool isSignedIn)
         {
             if (isSignedIn)
             {
